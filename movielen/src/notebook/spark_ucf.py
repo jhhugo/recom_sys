@@ -50,3 +50,47 @@ def UserSimilarity(item_users_rdd, users_rdd):
         for v, cuv in related_users.items():
             W[u][v] = cuv / math.sqrt(N[u] * N[v])
     return W
+
+
+def Precision(user_id, pui, test, n):
+    hit = 0
+    all = 0
+    tu = test[user_id]
+    for item in pui:
+        if item in tu:
+            hit += 1
+    all += n
+    return (hit, all)
+
+def Recall(user_id, pui, test, n):
+    hit = 0
+    all = 0
+    for user in train.keys():
+        tu = test[user]
+        rank = GetRecommendation(user, N)
+        for item, pui in rank:
+            if item in tu:
+                hit += 1
+        all += len(tu)
+    return hit / (all * 1.0)
+
+def eval(user_sims, test, n):
+    user_item_hist = test.map(lambda s: ('user_' + s['userId'], ('item_' + s['itemId'], s['rating']))).groupByKey().collect()
+    test_users = user_item_hist.keys().collect()
+
+    ui_dict = {}
+    for (user,items) in user_item_hist: 
+        ui_dict[user] = items
+
+    uib = sc.broadcast(ui_dict)
+
+    '''
+        为每个用户计算Top N的推荐
+        user_id -> [item1,item2,item3,...]
+    '''
+    # choose test recs
+    user_item_recs = user_sims.filter(lambda p: if p[0] in test_users).map(
+        lambda p: topNRecommendations(p[0],p[1],uib.value,n))
+    
+    hit, all = user_item_recs.map(lambda p: Precision(p[0], p[1], uib.value, n)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
+    p = hit / (all * 1.0)
