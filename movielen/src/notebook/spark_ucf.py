@@ -118,6 +118,10 @@ def topNRecommendations(user_id, user_sims, users_with_rating, n):
     totals = defaultdict(int)
     sim_sums = defaultdict(int)
 
+    user_items = users_with_rating.get(user_id, [])
+    if user_items != []:
+        user_items = [i for i, r in user_items]
+
     for ind, (neighbor,(sim,count)) in enumerate(user_sims):
 
         # 遍历邻居的打分
@@ -125,14 +129,15 @@ def topNRecommendations(user_id, user_sims, users_with_rating, n):
 
         if unscored_items:
             for (item,rating) in unscored_items:
-                if item not in users_with_rating.get(user_id, []):
+                if item not in user_items:
 
                 # 更新推荐度和相近度
                     totals[item] += sim * rating
                     sim_sums[item] += sim
 
     # 归一化
-    scored_items = [(total/(1e-10 if sim_sums[item] == 0 else sim_sums[item]), item) for item,total in totals.items()]
+    # scored_items = [(total/(1e-10 if sim_sums[item] == 0 else sim_sums[item]), item) for item,total in totals.items()]
+    scored_items = [(total, item) for item,total in totals.items()]
 
     # 按照推荐度降序排列
     scored_items.sort(reverse=True)
@@ -142,14 +147,14 @@ def topNRecommendations(user_id, user_sims, users_with_rating, n):
 
     return user_id, ranked_items[:n]
 
-def Precision(user_id, pui, test):
+def Precision(user_id, pui, test, n):
     hit = 0
     all = 0
     tui = test[user_id]
     for item in pui:
         if item in tui:
             hit += 1
-    all += len(pui)
+    all += n
     return (hit, all)
 
 def Recall(user_id, pui, test):
@@ -170,7 +175,7 @@ def Coverage(user_id, pui, train_items, test):
         all_items.add(item)
     for item in pui:
         recommend_items.add(item)
-    return len(recommend_items), len(all_items)
+    return recommend_items, all_items
 
 def Popularity(user_id, pui, item_popularity):
     ret = 0
@@ -204,14 +209,14 @@ def eval(user_sims, item_popularity, train_user_items, test, n):
         lambda p: topNRecommendations(p[0], p[1], train_user_items.value, n)).cache()
     
     # precision
-    hit, all = user_item_recs.map(lambda p: Precision(p[0], p[1], test_users_items.value)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
+    hit, all = user_item_recs.map(lambda p: Precision(p[0], p[1], test_users_items.value, n)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
     p = hit / (all * 1.0)
     # recall
     hit, all = user_item_recs.map(lambda p: Recall(p[0], p[1], test_users_items.value)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
     r = hit / (all * 1.0)
     # Coverage
-    recommend_items, all_items = user_item_recs.map(lambda p: Coverage(p[0], p[1], train_user_items.value, test_users_items.value)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
-    c = recommend_items / (all_items * 1.0)
+    recommend_items, all_items = user_item_recs.map(lambda p: Coverage(p[0], p[1], train_user_items.value, test_users_items.value)).reduce(lambda x, y: (x[0].union(y[0]), x[1].union(y[1])))
+    c = len(recommend_items) / (len(all_items) * 1.0)
     # popularity
     recom_popularity, all = user_item_recs.map(lambda p: Popularity(p[0], p[1], item_popularity.value)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
     popularity = recom_popularity / (all * 1.0)
