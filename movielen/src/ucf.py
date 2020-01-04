@@ -16,12 +16,23 @@ def SplitData(data, M, k, seed):
             train.append([user,item])
     return train, test
 
+def Recommend(user, train, W, K):
+    rank = defaultdict(int)
+    interacted_items = list(map(train[user], lambda p: p[0]))
+    for v, wuv in sorted(W[user].items, key=lambda p: p[1], reverse=True)[0:K]:
+        for i, rvi in train[v].items:
+            if i in interacted_items:
+            #we should filter items user interacted before
+                continue
+        rank[i] += wuv * rvi
+    return rank
+
 def Recall(train, test, N):
     hit = 0
     all = 0
     for user in train.keys():
         tu = test[user]
-        rank = GetRecommendation(user, N)
+        rank = Recommend(user, N)
         for item, pui in rank:
             if item in tu:
                 hit += 1

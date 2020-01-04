@@ -32,8 +32,6 @@ test_rdd = test_rdd.cache()
 
 print('user cf start......')
 s = time.perf_counter()
-# item users
-item_users = ratings_rdd.map(lambda s: ('item_' + s['movieId'], ('user_' + s['userId'], s['rating']))).groupByKey().cache()
 
 createCombiner = lambda v: [v]
 mergeValue = lambda agg, v: agg + [v]
@@ -51,10 +49,11 @@ train_user_norm_dict = sc.broadcast(train_user_norm_dict)
                                 ...]
 '''
 def findpairs(pairs):
-    for u1, u2 in permutations(pairs[1], 2):
-        return (u1[0], u2[0]), (u1[1], u2[1])
-
-pairwise_users = train_item_users.filter(lambda p: len(p[1]) > 1).map(findpairs).combineByKey(createCombiner, mergeValue, mergeCombiners).cache()
+    res = []
+    for u1, u2 in permutations(pairs, 2):
+        res.append(((u1[0], u2[0]), (u1[1], u2[1])))
+    return res
+pairwise_users = train_item_users.filter(lambda p: len(p[1]) > 1).map(lambda p: p[1]).flatMap(lambda p: findpairs(p)).combineByKey(createCombiner, mergeValue, mergeCombiners).cache()
 
 '''
     计算余弦相似度，找到最近的N个邻居:
@@ -70,12 +69,10 @@ def calcSim(pairs, user_norm_dict):
         对每个user对，根据打分计算余弦距离，并返回共同打分的item个数
     '''
     # 其他位置为0
-    sum_xx, sum_xy, sum_yy, sum_x, sum_y, n = (0.0, 0.0, 0.0, 0.0, 0.0, 0)
+    sum_xy, n = 0.0, 0
     
     for rating_pair in pairs[1]:
-        # sum_xx += np.float(rating_pair[0]) * np.float(rating_pair[0])
-        # sum_yy += np.float(rating_pair[1]) * np.float(rating_pair[1])
-        sum_xy += np.float(rating_pair[0]) * np.float(rating_pair[1])
+        sum_xy += rating_pair[0] * rating_pair[1]
         n += 1
 
     cos_sim = cosine(sum_xy, user_norm_dict[pairs[0][0]], user_norm_dict[pairs[0][1]])
