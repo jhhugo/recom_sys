@@ -50,8 +50,10 @@ train_user_norm_dict = sc.broadcast(train_user_norm_dict)
 '''
 def findpairs(pairs):
     res = []
+    # 考虑热门物品的影响, 冷门的物品兴趣才更加有把握相似
+    m = len(pairs)
     for u1, u2 in permutations(pairs, 2):
-        res.append(((u1[0], u2[0]), (u1[1], u2[1])))
+        res.append(((u1[0], u2[0]), (u1[1] / np.log1p(m), u2[1] / np.log1p(m))))
     return res
 pairwise_users = train_item_users.filter(lambda p: len(p[1]) > 1).map(lambda p: p[1]).flatMap(lambda p: findpairs(p)).combineByKey(createCombiner, mergeValue, mergeCombiners).cache()
 
@@ -70,7 +72,7 @@ def calcSim(pairs, user_norm_dict):
     '''
     # 其他位置为0
     sum_xy, n = 0.0, 0
-    
+
     for rating_pair in pairs[1]:
         sum_xy += rating_pair[0] * rating_pair[1]
         n += 1
@@ -187,8 +189,8 @@ def Popularity(user_id, pui, item_popularity):
 
 def popularity(pairs):
     popular = set()
-    for item, rating in pairs[1]:
-        popular.add(item)
+    for user, rating in pairs[1]:
+        popular.add(user)
     return pairs[0], len(popular)
 
 
