@@ -3,7 +3,7 @@ import time
 import gc
 import pandas as pd
 import numpy as np
-
+from multiprocessing import Pool
 from tqdm import tqdm
 
 s = time.perf_counter()
@@ -132,6 +132,43 @@ def Popularity(train, test, W, N):
             n += 1
     ret /= n * 1.0
     return ret 
+
+# map
+def ap(rank_list, ground_truth):
+    hit = 0
+    sum_pres = 0
+    for n, item in enumerate(rank_list, start=1):
+        if item in ground_truth:
+            hit += 1
+            sum_pres += hit / n
+    return sum_pres / hit
+
+def map(recom_results,train_truth,njobs=1):
+    p = Pool(njobs)
+    res = []
+    for user, rank_list in recom_results.items():
+        res.append(p.apply_async(ap, args=(rank_list, train_truth[user])))
+    p.close()
+    p.join()
+    aps = [r.get() for r in res]
+    return np.sum(aps) / len(aps)
+
+# ndcg(对于评分的)
+def dcg(rank_list):
+    sum_dcg = 0
+    for n, (item, rating) in enumerate(rank_list.items(), start=1):
+        sum_dcg += (2 ** (rating) - 1) / np.log2(n)
+    return sum_dcg
+
+def ndcg(recom_results, njobs=1):
+    p = Pool(njobs)
+    res = []
+    for user, rank_list in recom_results.items():
+        res.append(p.apply_async(dcg, args=(rank_list,)))
+    p.close()
+    p.join()
+    dcgs = [r.get() for r in res]
+    return np.sum(dcgs) / len(dcgs)
 
 def eval(train_user_items, test_user_items, W, N):
     p = Precision(train_user_items, test_user_items, W, N)

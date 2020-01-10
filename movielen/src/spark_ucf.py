@@ -8,24 +8,27 @@ from pyspark.sql import SparkSession
 from pyspark.sql.types import StructField, StructType, LongType, StringType, IntegerType
 import pyspark.sql.functions as F
 from pyspark import SparkContext, SparkConf
+from pyspark.serializers import PickleSerializer
 from tqdm import tqdm
 from itertools import permutations
 from collections import defaultdict
 import time
 
-spark = SparkSession.builder.appName("user cf on spark").master("local[8]").getOrCreate()
+# conf = SparkConf(serializer=PickleSerializer())
+spark = SparkSession.builder.appName("user cf on spark").master("local[8]").config('serializer', PickleSerializer()).getOrCreate()
 
 sc = spark.sparkContext
+
 
 schema = StructType([StructField('userId', IntegerType(), True), 
             StructField('movieId', IntegerType(), True), 
             StructField('rating', LongType(), True), 
             StructField('timestamp', IntegerType(), True)])
-ratings = spark.read.csv(r'D:\Users\hao.guo\比赛代码提炼\推荐系统\movielen\ml-20m\ratings_small.csv', header=True)
+ratings = spark.read.csv(r'D:\Users\hao.guo\比赛代码提炼\推荐系统\movielen\ml-20m\ratings.csv', header=True)
 
 ratings = ratings.withColumn('rating', ratings['rating'].cast('int'))
 ratings_rdd = ratings.select(['userId', 'movieId', 'rating']).rdd
-# ratings_rdd = ratings_rdd.sample(withReplacement=False, fraction=0.5, seed=2020)
+# ratings_rdd = ratings_rdd.sample(withReplacement=False, fraction=0.1, seed=2020)
 train_rdd, test_rdd = ratings_rdd.randomSplit([0.7, 0.3], seed=2020)
 train_rdd = train_rdd.cache()
 test_rdd = test_rdd.cache()
@@ -36,7 +39,7 @@ s = time.perf_counter()
 createCombiner = lambda v: [v]
 mergeValue = lambda agg, v: agg + [v]
 mergeCombiners = lambda agg1, agg2: agg1 + agg2
-train_item_users = train_rdd.map(lambda s: ('item_' + s['movieId'], ('user_' + s['userId'], s['rating']))).combineByKey(createCombiner, mergeValue, mergeCombiners).cache()
+train_item_users = train_rdd.map(lambda s: ('item_' + s['movieId'], ('user_' + s['userId'], s['rating']))).combineByKey(createCombiner, mergeValue, mergeCombiners)
 train_user_norm_dict = train_rdd.map(lambda s: ('user_' + s['userId'], s['rating'] ** 2)).reduceByKey(lambda p1, p2: p1 + p2).mapValues(lambda v: np.sqrt(v)).collectAsMap()
 
 train_user_norm_dict = sc.broadcast(train_user_norm_dict)
@@ -55,7 +58,7 @@ def findpairs(pairs):
     for u1, u2 in permutations(pairs, 2):
         res.append(((u1[0], u2[0]), (u1[1] / np.log1p(m), u2[1] / np.log1p(m))))
     return res
-pairwise_users = train_item_users.filter(lambda p: len(p[1]) > 1).map(lambda p: p[1]).flatMap(lambda p: findpairs(p)).combineByKey(createCombiner, mergeValue, mergeCombiners).cache()
+pairwise_users = train_item_users.filter(lambda p: len(p[1]) > 1).map(lambda p: p[1]).flatMap(lambda p: findpairs(p)).combineByKey(createCombiner, mergeValue, mergeCombiners)
 
 '''
     计算余弦相似度，找到最近的N个邻居:
@@ -222,39 +225,40 @@ def eval(user_sims, item_popularity, train_user_items, test, n):
     # popularity
     recom_popularity, all = user_item_recs.map(lambda p: Popularity(p[0], p[1], item_popularity.value)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
     popularity = recom_popularity / (all * 1.0)
-    del user_item_recs
+    del user_item_recs, user_item, user_item_hist, test_users, test_users_items
     gc.collect()
     return p, r, c, popularity
 
 # 生成训练集各用户的相似矩阵
 user_sims = user_sim(pairwise_users, train_user_norm_dict, 5)
 print('eval model start......')
-p5, r5, c5, popularity5 = eval(user_sims, item_popularity, train_user_items, test_rdd, 100)
+p5, r5, c5, popularity5 = eval(user_sims, item_popularity, train_user_items, test_rdd, 50)
 print('top 5 model: %s, %s, %s, %s' % (p5, r5, c5, popularity5))
 del user_sims
 gc.collect()
 
 user_sims = user_sim(pairwise_users, train_user_norm_dict, 10)
-p10, r10, c10, popularity10 = eval(user_sims, item_popularity, train_user_items, test_rdd, 100)
+p10, r10, c10, popularity10 = eval(user_sims, item_popularity, train_user_items, test_rdd, 50)
 print('top 10 model: %s, %s, %s, %s' % (p10, r10, c10, popularity10))
 del user_sims
 gc.collect()
 
 user_sims = user_sim(pairwise_users, train_user_norm_dict, 20)
-p20, r20, c20, popularity20 = eval(user_sims, item_popularity, train_user_items, test_rdd, 100)
+p20, r20, c20, popularity20 = eval(user_sims, item_popularity, train_user_items, test_rdd, 50)
 print('top 20 model: %s, %s, %s, %s' % (p20, r20, c20, popularity20))
 del user_sims
 gc.collect()
 
 user_sims = user_sim(pairwise_users, train_user_norm_dict, 40)
-p40, r40, c40, popularity40 = eval(user_sims, item_popularity, train_user_items, test_rdd, 100)
+p40, r40, c40, popularity40 = eval(user_sims, item_popularity, train_user_items, test_rdd, 50)
 print('top 40 model: %s, %s, %s, %s' % (p40, r40, c40, popularity40 ))
 del user_sims
 gc.collect()
 
 user_sims = user_sim(pairwise_users, train_user_norm_dict, 80)
-p80, r80, c80, popularity80 = eval(user_sims, item_popularity, train_user_items, test_rdd, 100)
+p80, r80, c80, popularity80 = eval(user_sims, item_popularity, train_user_items, test_rdd, 50)
 print('top 80 model: %s, %s, %s, %s' % (p80, r80, c80, popularity80))
 del user_sims
 gc.collect()
 print('cost time %s min' % ((time.perf_counter() - s) / 60))
+

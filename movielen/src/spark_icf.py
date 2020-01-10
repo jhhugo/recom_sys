@@ -96,7 +96,7 @@ def nearestNeighbors(item_id, co_pairs, n):
     '''
     # 归一化
     max_w = np.max([pairs[0] for i, pairs in co_pairs])
-    scored_pairs = [(i, (pairs[0] / max_w, pairs[1])) for i, pairs in co_pairs]
+    scored_pairs = [(i, (pairs[0] / max_w if max_w != 0 else 0.0, pairs[1])) for i, pairs in co_pairs]
     scored_pairs.sort(key=lambda x: x[1][0], reverse=True)
     return item_id, scored_pairs[:n]
 
