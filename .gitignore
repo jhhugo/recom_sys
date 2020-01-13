@@ -1,6 +1,9 @@
 .DS_Store
 *.out
 metastore_db/
+data/
+*.zip
+ml-20m/
 
 
 # Byte-compiled / optimized / DLL files
