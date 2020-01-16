@@ -1,6 +1,6 @@
 from scipy.sparse import lil_matrix
 from libc.math cimport log1p
-cimport numpy as np
+import numpy as np
 cdef int ITEM_NUM = 4318201
 cimport cython
 
@@ -8,7 +8,7 @@ cimport cython
 @cython.wraparound(False)
 cpdef calculate_matrix(list user_log_times):
     cdef int i1, i2, idx, j
-    mat = lil_matrix((ITEM_NUM+1, ITEM_NUM+1), dtype=float)
+    mat = lil_matrix((ITEM_NUM+1, ITEM_NUM+1), dtype=np.float32)
     for user_log, user_time in user_log_times:
         for idx, i1 in enumerate(user_log):
             for i2 in user_log[(idx+1):]:
