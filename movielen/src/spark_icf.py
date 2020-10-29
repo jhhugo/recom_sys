@@ -13,31 +13,32 @@ from itertools import permutations
 from collections import defaultdict
 import time
 
-spark = SparkSession.builder.appName("user cf on spark").master("local[8]").getOrCreate()
+spark = SparkSession.builder.appName("item cf on spark").master("local[8]").getOrCreate()
 
 sc = spark.sparkContext
 
 schema = StructType([StructField('userId', IntegerType(), True), 
-            StructField('movieId', IntegerType(), True), 
-            StructField('rating', LongType(), True), 
-            StructField('timestamp', IntegerType(), True)])
-ratings = spark.read.csv(r'D:\Users\hao.guo\比赛代码提炼\推荐系统\movielen\ml-20m\ratings_small.csv', header=True)
+                     StructField('movieId', IntegerType(), True), 
+                     StructField('rating', LongType(), True), 
+                     StructField('timestamp', IntegerType(), True)])
+ratings = spark.read.csv(r'D:\Users\hao.guo\deepctr\recsys\movielen\ml-20m\ratings_small.csv', header=True)
 
 ratings = ratings.withColumn('rating', ratings['rating'].cast('int'))
 ratings_rdd = ratings.select(['userId', 'movieId', 'rating']).rdd
 # ratings_rdd = ratings_rdd.sample(withReplacement=False, fraction=0.5, seed=2020)
 train_rdd, test_rdd = ratings_rdd.randomSplit([0.7, 0.3], seed=2020)
-train_rdd = train_rdd.cache()
-test_rdd = test_rdd.cache()
+# train_rdd = train_rdd.cache()
+# test_rdd = test_rdd.cache()
 
-print('user cf start......')
+print('item cf start......')
 s = time.perf_counter()
 
 createCombiner = lambda v: [v]
 mergeValue = lambda agg, v: agg + [v]
 mergeCombiners = lambda agg1, agg2: agg1 + agg2
 
-train_user_items = train_rdd.map(lambda s: ('user_' + s['userId'], ('item_' + s['movieId'], s['rating']))).combineByKey(createCombiner, mergeValue, mergeCombiners)
+# 代替groupbykey
+train_user_items = train_rdd.map(lambda s: ('user_' + s['userId'], [('item_' + s['movieId'], s['rating'])])).reduceByKey(lambda p1, p2: p1 + p2)
 train_item_norm_dict = train_rdd.map(lambda s: ('item_' + s['movieId'], s['rating'] ** 2)).reduceByKey(lambda p1, p2: p1 + p2).mapValues(lambda v: np.sqrt(v)).collectAsMap()
 
 train_item_norm_dict = sc.broadcast(train_item_norm_dict)
@@ -54,11 +55,11 @@ def findpairs(pairs):
     # 考虑活跃用户的影响, 冷门的物品兴趣才更加有把握相似
     m = len(pairs)
     for u1, u2 in permutations(pairs, 2):
-        res.append(((u1[0], u2[0]), (u1[1] / np.log1p(m), u2[1] / np.log1p(m))))
+        res.append(((u1[0], u2[0]), [(u1[1] / np.log1p(m), u2[1] / np.log1p(m))]))
         # res.append(((u1[0], u2[0]), (u1[1], u2[1])))
     return res
 
-pairwise_items = train_user_items.filter(lambda p: len(p[1]) > 1).map(lambda p: p[1]).flatMap(lambda p: findpairs(p)).combineByKey(createCombiner, mergeValue, mergeCombiners)
+pairwise_items = train_user_items.filter(lambda p: len(p[1]) > 1).map(lambda p: p[1]).flatMap(lambda p: findpairs(p)).reduceByKey(lambda p1, p2: p1 + p2)
 
 '''
     计算余弦相似度，找到最近的N个邻居:
@@ -181,23 +182,30 @@ def popularity(pairs):
         popular.add(user)
     return pairs[0], len(popular)
 
-train_item_users = train_rdd.map(lambda s: ('item_' + s['movieId'], ('user_' + s['userId'], s['rating']))).combineByKey(createCombiner, mergeValue, mergeCombiners)
+train_item_users = train_rdd.map(lambda s: ('item_' + s['movieId'], [('user_' + s['userId'], s['rating'])])).reduceByKey(lambda p1, p2: p1 + p2)
+# item流行度字典
 item_popularity = sc.broadcast(train_item_users.map(popularity).collectAsMap())
 
+user_item = test_rdd.map(lambda s: ('user_' + s['userId'], ['item_' + s['movieId']])).reduceByKey(lambda p1, p2: p1 + p2)
+user_item_hist = user_item.collectAsMap()
+test_users = list(user_item_hist.keys())
+test_users_items = sc.broadcast(user_item_hist)
+train_items = sc.broadcast(train_user_items.collectAsMap())
 
-def eval(item_sims, train_user_items, item_popularity, test, n):
-    user_item = test.map(lambda s: ('user_' + s['userId'], 'item_' + s['movieId'])).combineByKey(createCombiner, mergeValue, mergeCombiners)
-    user_item_hist = user_item.collectAsMap()
-    test_users = list(user_item_hist.keys())
-    test_users_items = sc.broadcast(user_item_hist)
+def eval(test_users, test_users_items, item_sims_w, train_items, item_popularity, n):
+# def eval(item_sims, train_user_items, item_popularity, test, n):
+    # user_item = test.map(lambda s: ('user_' + s['userId'], ['item_' + s['movieId']])).reduceByKey(lambda p1, p2: p1 + p2)
+    # user_item_hist = user_item.collectAsMap()
+    # test_users = list(user_item_hist.keys())
+    # test_users_items = sc.broadcast(user_item_hist)
 
-    item_sims_w = sc.broadcast(item_sims.collectAsMap())
+    # item_sims_w = sc.broadcast(item_sims.collectAsMap())
 
     '''
         为每个用户计算Top N的推荐
         user_id -> [item1,item2,item3,...]
     '''
-    # choose test recs
+    # choose test recs, 有过历史浏览的用户
     user_item_recs = train_user_items.filter(lambda p: p[0] in test_users).map(
         lambda p: topNRecommendations(p[0], p[1], item_sims_w.value, n)).cache()
     
@@ -208,23 +216,27 @@ def eval(item_sims, train_user_items, item_popularity, test, n):
     hit, all = user_item_recs.map(lambda p: Recall(p[0], p[1], test_users_items.value)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
     r = hit / (all * 1.0)
     # Coverage
-    train_items = sc.broadcast(train_user_items.collectAsMap())
+    # train_items = sc.broadcast(train_user_items.collectAsMap())
     recommend_items, all_items = user_item_recs.map(lambda p: Coverage(p[0], p[1], train_items.value, test_users_items.value)).reduce(lambda x, y: (x[0].union(y[0]), x[1].union(y[1])))
     c = len(recommend_items) / (len(all_items) * 1.0)
     # popularity
     recom_popularity, all = user_item_recs.map(lambda p: Popularity(p[0], p[1], item_popularity.value)).reduce(lambda x, y: (x[0] + y[0], x[1] + y[1]))
     popularity = recom_popularity / (all * 1.0)
-    del user_item_recs, user_item_hist, test_users, test_users_items, item_popularity, item_sims_w, train_items
+    # del user_item_recs, user_item_hist, test_users, test_users_items, item_popularity, item_sims_w, train_items
+    del user_item_recs, test_users, test_users_items, item_popularity, item_sims_w, train_items
     gc.collect()
     return p, r, c, popularity
 
 # 生成训练集各用户的相似矩阵
 for k in [5, 10, 20, 40, 80, 160]:
+    # 物品最相近的N个物品
     item_sims = item_sim(pairwise_items, train_item_norm_dict, k)
+    item_sims_w = sc.broadcast(item_sims.collectAsMap())
     print('eval model start......')
-    p, r, c, popularity = eval(item_sims, train_user_items, item_popularity, test_rdd, 50)
+    # p, r, c, popularity = eval(item_sims_w, train_user_items, item_popularity, test_rdd, 50)
+    p, r, c, popularity = eval(test_users, test_users_items, item_sims_w, train_items, item_popularity, 50)
     print('top %s model: %s, %s, %s, %s' % (k, p, r, c, popularity))
-    del item_sims
+    del item_sims, item_sims_w
     gc.collect()
 
 # user_sims = user_sim(pairwise_users, train_user_norm_dict, 10)

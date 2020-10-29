@@ -157,7 +157,7 @@ def map(recom_results,train_truth,njobs=1):
 def dcg(rank_list):
     sum_dcg = 0
     for n, (item, rating) in enumerate(rank_list.items(), start=1):
-        sum_dcg += (2 ** (rating) - 1) / np.log2(n)
+        sum_dcg += (2 ** (rating) - 1) / np.log2(n + 1)
     return sum_dcg
 
 def ndcg(recom_results, njobs=1):

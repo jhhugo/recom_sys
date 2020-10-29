@@ -2,6 +2,8 @@
 from distutils.core import setup, Extension
 from Cython.Build import cythonize
 import numpy
+import xgboost as xgb
+
 setup(ext_modules = cythonize(Extension(
     'calculate_matrix',
     sources=['cal_mat.pyx'],
